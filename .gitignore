@@ -1,0 +1,30 @@
+# 构建相关目录
+build/
+dist/
+*.egg-info/  # 打包生成的元信息目录
+
+# 虚拟环境相关目录（包含 Lib、Scripts 等）
+venv/
+env/
+ENV/
+.venv/
+
+# 虚拟环境中的具体子目录（防止遗漏）
+Lib/
+Scripts/
+site-packages/
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
