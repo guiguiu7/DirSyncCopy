@@ -1,2 +1,5 @@
-## 文件打包命令
-pyinstaller --onefile --icon=favicon.ico --name DirSyncCopy src/main.py
+## v1.0.0
+
+###功能：
+  - 将源目录中的文件复制到目标目录
+  - 实时监控文件，当源目录中的文件修改自动改变目标目录中对应文件
