@@ -13,6 +13,10 @@ ENV/
 Lib/
 Scripts/
 site-packages/
+*.cfg
+*.log
+*.spec
+src/*.log
 
 # Python 编译缓存
 __pycache__/

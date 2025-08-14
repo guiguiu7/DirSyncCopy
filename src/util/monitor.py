@@ -10,15 +10,15 @@ import src.util.copy_util as cu
 
 source = ""
 dest = ""
-file_list = []
 
 class FileChangeHandler(FileSystemEventHandler):
-    def __init__(self, exclude_patterns=None):
+    def __init__(self, file_list, exclude_patterns=None):
         self.exclude_patterns = exclude_patterns or [
             ".~", ".log", ".swp", ".swo",           # 临时文件和日志
             ".tmp", ".bak", ".sync", ".exe"         # 扩展常见文件后缀
         ]
         self.last_handled = {}  # 用于记录上次处理时间和MD5
+        self.file_list = file_list
 
     def should_ignore(self, file_path):
         for pattern in self.exclude_patterns:
@@ -46,7 +46,7 @@ class FileChangeHandler(FileSystemEventHandler):
                 return
 
         stored_md5 = None
-        for item in file_list:
+        for item in self.file_list:
             if os.path.normpath(item["path"]) == os.path.normpath(file_path):
                 stored_md5 = item["md5"]
                 break
@@ -55,14 +55,13 @@ class FileChangeHandler(FileSystemEventHandler):
             return
         self.last_handled[file_path] = (current_time, current_md5)
         log.info(f"文件修改: {file_path}")
-        cu.compare_files(source, dest)
+        self.file_list = cu.compare_files(source, dest)[2]
 
 def run_monitor(watch_path, dest_path, files):
     global source,dest,file_list
     source = watch_path
     dest = dest_path
-    file_list = files
-    event_handle = FileChangeHandler()
+    event_handle = FileChangeHandler(files)
     observer = Observer()
     observer.schedule(event_handle, watch_path, False)
     try:

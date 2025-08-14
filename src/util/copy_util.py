@@ -2,6 +2,7 @@
 import hashlib
 import os
 import shutil
+from pathlib import Path
 
 from src.util.log_config import log
 
@@ -47,7 +48,6 @@ def _calculate_md5_large(file_path, block_size=65536):
 def compare_files(source, destination):
     global dest
     dest = destination
-    n = 0
     result = []
     source_files = []
     dest_files = []
@@ -63,20 +63,80 @@ def compare_files(source, destination):
         raise
     copy_source_files = source_files.copy()
     result.append(copy_source_files)
-    for source_file in source_files.copy():
-        for dest_file in dest_files:
-            if (source_file["name"] == dest_file["name"] and
-                    source_file["md5"] == dest_file["md5"]):
-                n += 1
-                source_files.remove(source_file)
-                break
-    log.info(f"相同的文件有{n}个")
-    log.info(f"需要拷贝的文件有{len(source_files)}个")
+    # 获取需要的同步文件
+    same_num, copy_num = sync_files(source_files, dest_files)
+
+    log.info(f"相同的文件有{same_num}个")
+    if copy_num:
+        log.info(f"需要拷贝的文件有{copy_num}个")
     _source_to_dest(source_files)
     return result
 
 
+def sync_files(source_files, dest_files):
+    """
+    文件同步逻辑：
+        1. 使用字典加速查找
+        2. 减少嵌套循环
+        3. 添加错误处理
+        4. 使用pathlib处理路径
+
+    Args:
+        source_files []: 源目录文件
+        dest_files []: 目标目录文件
+    Return:
+        processed : 相同文件的数量
+        len(source_files) : 复制的文件数量
+    """
+    # 构建目标文件MD5索引 {md5: [file_info]}
+    dest_md5_index = {}
+    for df in dest_files:
+        dest_md5_index.setdefault(df["md5"], []).append(df)
+
+    processed = 0
+    for sf in source_files.copy():  # 遍历副本以便修改原列表
+        if sf["md5"] not in dest_md5_index:  # 跳过MD5不同的文件 需要复制的文件
+            continue
+
+        # MD5 相同且名字相同 移除相同的文件，不需要复制
+        same_name = any(
+            df["name"] == sf["name"] for df in dest_md5_index[sf["md5"]]
+        )
+
+        if same_name:
+            processed += 1
+            source_files.remove(sf)
+            continue
+
+        # 处理MD5相同名字不同的文件
+        for df in dest_md5_index[sf["md5"]]:
+            try:
+                dest_path = Path(df["path"])
+                source_path = Path(sf["path"])
+
+                if os.path.exists(dest_path):
+                    os.unlink(dest_path)
+                    shutil.copy2(source_path, dest_path.parent)
+                    log.info(
+                        f"文件重命名: {sf['path']} -> {df['path']} "
+                        f"(MD5: {sf['md5'][:8]}...)"
+                    )
+                    processed += 1
+                    source_files.remove(sf)
+                    break
+            except OSError as e:
+                log.error(f"移动文件失败: {df['path']} -> {sf['path']} | 错误: {e}")
+
+    return processed, len(source_files)
+
+
 def _source_to_dest(need_copy_files):
+    """
+    将文件复制到目标目录
+    :arg
+        need_copy_files []: 需要复制的文件列表
+    :return 复制的文件数量
+    """
     n = 0
     if not need_copy_files:
         log.info("没有需要复制的文件")
