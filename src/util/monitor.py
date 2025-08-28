@@ -2,7 +2,9 @@
 import time
 import hashlib
 import os
+import shutil
 
+from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from src.util.log_config import log
@@ -12,13 +14,15 @@ source = ""
 dest = ""
 
 class FileChangeHandler(FileSystemEventHandler):
-    def __init__(self, file_list, exclude_patterns=None):
+    def __init__(self, file_list, exclude_patterns=None, enable_create=True, enable_delete=True):
         self.exclude_patterns = exclude_patterns or [
             ".~", ".log", ".swp", ".swo",           # 临时文件和日志
             ".tmp", ".bak", ".sync", ".exe"         # 扩展常见文件后缀
         ]
         self.last_handled = {}  # 用于记录上次处理时间和MD5
         self.file_list = file_list
+        self.enable_delete = enable_delete
+        self.enable_create = enable_create
 
     def should_ignore(self, file_path):
         for pattern in self.exclude_patterns:
@@ -28,9 +32,60 @@ class FileChangeHandler(FileSystemEventHandler):
                 return True
         return False
 
-    def on_modified(self, event):
-        if event.is_directory:
+    def on_created(self, event):
+        # 只处理目录创建事件（on_modified可能触发多次，on_created更精准）
+        if self.enable_create:
+            self._sync_create(event.src_path)
+
+    def on_deleted(self, event):
+        """处理目录删除，同步删除目标目录对应文件夹"""
+        if self.enable_delete:
+            self._sync_deleted(event.src_path)
+
+    def _sync_deleted(self, path):
+        """删除目标目录中对应的文件夹"""
+        try:
+            relative_dir = Path(path).relative_to(source)
+        except ValueError:
+            return  # 不在源目录下，忽略
+
+        dest_path = dest / relative_dir
+        if not dest_path.exists():
             return
+        if dest_path.is_dir():
+            try:
+                # 递归删除目录（包括所有子文件和子目录）
+                shutil.rmtree(dest_path)
+                log.info(f"删除目录：{dest_path}")
+            except Exception as e:
+                log.error(f"删除目录失败：{dest_path}，错误：{e}")
+        else:
+            os.unlink(dest_path)
+            log.info(f"删除文件：{dest_path}")
+
+    def _sync_create(self, path):
+        # 检查是否是源目录下的子目录
+        try:
+            # 获取相对于源目录的相对路径（如 source/sub/dir → sub/dir）
+            relative_path = Path(path).relative_to(source)
+        except ValueError:
+            # 不在源目录下，忽略
+            return
+
+        # 目标目录中对应的路径
+        dest_path = dest / relative_path
+
+        # 若目标目录不存在，则创建（包括所有父目录）
+        if not dest_path.exists() and Path(path).is_dir():
+            dest_path.mkdir(parents=True, exist_ok=True)
+            log.info(f"同步创建目录：{dest_dir}")
+        elif not dest_path.exists() and Path(path).is_file():
+            shutil.copy2(path, dest_path)
+            log.info(f"同步创建文件：{dest_path}")
+        else:
+            log.warn(f"已存在：{dest_path}")
+
+    def on_modified(self, event):
         if self.should_ignore(event.src_path):
             return
 
@@ -63,7 +118,7 @@ def run_monitor(watch_path, dest_path, files):
     dest = dest_path
     event_handle = FileChangeHandler(files)
     observer = Observer()
-    observer.schedule(event_handle, watch_path, False)
+    observer.schedule(event_handle, watch_path, True)
     try:
         observer.start()
         log.info(f"开始监控: {watch_path}（按 Ctrl+C 停止）")

@@ -1,6 +1,7 @@
 # 编辑时间:2025/8/8 18:34
 import os.path
 import sys
+import platform
 
 import src.util.copy_util as cu
 import src.util.monitor as monitor
@@ -26,11 +27,12 @@ def print_version():
     print("文件监控工具 v1.0")
 
 
-def get_effective_path(source):
-    if not os.path.isabs(source):
-        abs_path = os.path.abspath(source)
-        return abs_path
-    return source
+def get_effective_path(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"目录不存在{path}")
+    abs_path = os.path.abspath(path)
+    normalized_path = os.path.normpath(abs_path)
+    return normalized_path
 
 
 if __name__ == "__main__":
@@ -60,11 +62,22 @@ if __name__ == "__main__":
         log.error("错误：路径不能为空！")
         os.system("pause")
         sys.exit(1)
-    source = get_effective_path(source)
+    try:
+        source = get_effective_path(source)
+        dest = get_effective_path(dest)
+        if platform.system() == "Windows":
+            source = source.lower()
+            dest = dest.lower()
+        if source == dest:
+            raise Exception("源目录与目标目录不能相同")
+    except Exception as e:
+        log.error(e)
+        os.system("pause")
+        sys.exit(1)
     # 程序一运行会先进行文件的比对复制
     log.info(f"源文件目录:{source}")
     log.info(f"目标目录:{dest}")
-    files = cu.compare_files(source, dest)
+    files = cu.Copy_Util(source, dest).compare_files()
     if len(files[0]):
         log.info(f"需要同步的文件:{'无' if files[0] == [] else files[0]}")
     # 自动重启机制：如果程序崩溃，等待几秒后重新启动
