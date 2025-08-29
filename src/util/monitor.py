@@ -1,4 +1,5 @@
-# 编辑时间:2025/8/11 10:49
+# 编辑时间:2025/8/11 10:49 By Gwynliu7
+import sys
 import time
 import hashlib
 import os
@@ -9,20 +10,21 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from src.util.log_config import log
 import src.util.copy_util as cu
+import src.util.read_ini_file as rif
 
 source = ""
 dest = ""
 
 class FileChangeHandler(FileSystemEventHandler):
-    def __init__(self, file_list, exclude_patterns=None, enable_create=True, enable_delete=True):
+    def __init__(self, file_list, config, exclude_patterns=None, enable_create=True, enable_delete=True):
         self.exclude_patterns = exclude_patterns or [
             ".~", ".log", ".swp", ".swo",           # 临时文件和日志
-            ".tmp", ".bak", ".sync", ".exe"         # 扩展常见文件后缀
+            ".tmp", ".bak", ".sync", ".exe", ".ini"         # 扩展常见文件后缀
         ]
         self.last_handled = {}  # 用于记录上次处理时间和MD5
         self.file_list = file_list
-        self.enable_delete = enable_delete
-        self.enable_create = enable_create
+        self.enable_delete = config.get("enable_delete")       # 配置是否监控删除
+        self.enable_create = config.get("enable_create")       # 配置是否监控创建
 
     def should_ignore(self, file_path):
         for pattern in self.exclude_patterns:
@@ -37,12 +39,37 @@ class FileChangeHandler(FileSystemEventHandler):
         if self.enable_create:
             self._sync_create(event.src_path)
 
+    def on_moved(self, event):
+        if event.is_directory and not event.is_synthetic:
+            # 构建源目录和目标目录的路径对象
+            src_dir = Path(event.src_path)
+            dest_dir = dest / src_dir.relative_to(source)
+
+            # 新的目标路径（根据新名称）
+            new_dest_dir = dest / Path(event.dest_path).relative_to(source)
+
+            try:
+                # 如果目标目录已存在则先删除
+                if new_dest_dir.exists():
+                    shutil.rmtree(new_dest_dir)
+
+                # 重命名目标目录
+                if dest_dir.exists():  # 确保源目录存在
+                    shutil.move(str(dest_dir), str(new_dest_dir))
+                    print(f"文件夹已重命名: {dest_dir} -> {new_dest_dir}")
+
+            except PermissionError:
+                print(f"权限不足，无法重命名文件夹: {dest_dir}")
+            except Exception as e:
+                print(f"重命名文件夹时出错: {str(e)}")
+
     def on_deleted(self, event):
         """处理目录删除，同步删除目标目录对应文件夹"""
         if self.enable_delete:
             self._sync_deleted(event.src_path)
 
     def _sync_deleted(self, path):
+        print("delete")
         """删除目标目录中对应的文件夹"""
         try:
             relative_dir = Path(path).relative_to(source)
@@ -56,14 +83,15 @@ class FileChangeHandler(FileSystemEventHandler):
             try:
                 # 递归删除目录（包括所有子文件和子目录）
                 shutil.rmtree(dest_path)
-                log.info(f"删除目录：{dest_path}")
+                log.info(f"同步删除目录：{dest_path}")
             except Exception as e:
-                log.error(f"删除目录失败：{dest_path}，错误：{e}")
+                log.error(f"同步删除目录失败：{dest_path}，错误：{e}")
         else:
             os.unlink(dest_path)
-            log.info(f"删除文件：{dest_path}")
+            log.info(f"同步删除文件：{dest_path}")
 
     def _sync_create(self, path):
+        print("create")
         # 检查是否是源目录下的子目录
         try:
             # 获取相对于源目录的相对路径（如 source/sub/dir → sub/dir）
@@ -78,7 +106,7 @@ class FileChangeHandler(FileSystemEventHandler):
         # 若目标目录不存在，则创建（包括所有父目录）
         if not dest_path.exists() and Path(path).is_dir():
             dest_path.mkdir(parents=True, exist_ok=True)
-            log.info(f"同步创建目录：{dest_dir}")
+            log.info(f"同步创建目录：{dest_path}")
         elif not dest_path.exists() and Path(path).is_file():
             shutil.copy2(path, dest_path)
             log.info(f"同步创建文件：{dest_path}")
@@ -86,6 +114,9 @@ class FileChangeHandler(FileSystemEventHandler):
             log.warn(f"已存在：{dest_path}")
 
     def on_modified(self, event):
+        if event.is_directory:
+            return
+
         if self.should_ignore(event.src_path):
             return
 
@@ -105,18 +136,20 @@ class FileChangeHandler(FileSystemEventHandler):
             if os.path.normpath(item["path"]) == os.path.normpath(file_path):
                 stored_md5 = item["md5"]
                 break
-        current_md5 = cu._calculate_md5_large(file_path)
+
+        copy_util = cu.Copy_Util(source, dest)
+        current_md5 = copy_util._calculate_md5_large(file_path)
         if stored_md5 == current_md5:
             return
         self.last_handled[file_path] = (current_time, current_md5)
         log.info(f"文件修改: {file_path}")
-        self.file_list = cu.compare_files(source, dest)[2]
+        self.file_list = copy_util.compare_files(source, dest)[2]
 
-def run_monitor(watch_path, dest_path, files):
+def run_monitor(watch_path, dest_path, files, config):
     global source,dest,file_list
     source = watch_path
     dest = dest_path
-    event_handle = FileChangeHandler(files)
+    event_handle = FileChangeHandler(files, config)
     observer = Observer()
     observer.schedule(event_handle, watch_path, True)
     try:

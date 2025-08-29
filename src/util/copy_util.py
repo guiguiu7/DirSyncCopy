@@ -7,19 +7,20 @@ from pathlib import Path
 from src.util.log_config import log
 
 class Copy_Util:
-    def __init__(self, source, dest):
+    def __init__(self, source, dest, config):
         self.source = source
         self.dest = dest
+        self.keep_empty_dir = config.get("sync_empty_dir")
 
     def _get_files(self, folder_path):
         files_info = []
         if not os.path.isdir(folder_path):
-            raise Exception(f"文件夹路径不存在:{folder_path}")
+            raise Exception(f"目录不存在:{folder_path}")
         with os.scandir(folder_path) as files:
             for file in files:
                 if file.name.startswith("~$") or file.name.startswith(".~") or os.path.splitext(file.name)[1] == ".exe":
                     continue
-                if ".log" in file.name:
+                if file.name.endswith((".log", ".ini")):
                     continue
                 if file.is_file():
                     file_stat = file.stat()
@@ -40,6 +41,22 @@ class Copy_Util:
         files_info.sort(key=lambda x: (x["created_time"], x["name"]))
         return files_info
 
+    def _get_dirs(self, root_dir):
+        empty_folders = []
+        root_path = Path(root_dir).resolve()  # 转换为绝对路径，处理相对路径
+
+        if not root_path.exists():
+            raise FileNotFoundError(f"目录不存在: {root_path}")
+
+        if not root_path.is_dir():
+            raise NotADirectoryError(f"不是目录: {root_path}")
+
+        # 遍历目录树
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            if not dirnames and not filenames:
+                empty_folders.append(str(Path(dirpath).resolve()))
+
+        return empty_folders
 
     def _calculate_md5_large(self, file_path, block_size=65536):
         """计算大文件的MD5哈希值（分块读取）"""
@@ -51,21 +68,31 @@ class Copy_Util:
 
 
     def compare_files(self):
-        result = []
+        result = {}
         source_files = []
         dest_files = []
         copy_source_files = []
+        source_dirs = []
+        dest_dirs = []
         try:
             # 添加源目录文件列表
             source_files = self._get_files(self.source)
-            result.append(source_files)
+            result["source_files"] = source_files
             # 添加目标目录文件列表
             dest_files = self._get_files(self.dest)
-            result.append(dest_files)
+            result["dest_files"] = dest_files
+
+            # 获取空目录
+            if self.keep_empty_dir:
+                source_dirs = self._get_dirs(self.source)
+                result["source_dirs"] = source_dirs
+                dest_dirs = self._get_dirs(self.dest)
+                result["dest_dirs"] = dest_dirs
+
         except Exception as e:
             raise
         copy_source_files = source_files.copy()
-        result.append(copy_source_files)
+        result["copy_source_files"] = copy_source_files
         # 获取需要的同步文件
         same_num, copy_num = self.sync_files(source_files, dest_files)
 
@@ -82,7 +109,17 @@ class Copy_Util:
                 'md5': file["md5"]
             }
             return_files.append(file_info)
-        result[0] = return_files
+        result["return_files"] = return_files
+
+        # 同步空目录
+        if self.keep_empty_dir:
+            if not result.get("source_dirs"):
+                return result
+            empty_dirs = self.sync_empty_dirs(source_dirs, dest_dirs)
+            if empty_dirs['processed']:
+                log.info(f"成功同步{empty_dirs.get('processed')}个空文件夹")
+                log.info(f"成功同步空文件夹：{empty_dirs.get('result')}")
+
         return result
 
 
@@ -143,6 +180,22 @@ class Copy_Util:
 
         return processed, len(source_files)
 
+    def sync_empty_dirs(self, source_dirs, dest_dirs):
+        """
+        同步空文件夹
+        :param source_dirs:
+        :param dest_dirs:
+        :return:
+        """
+        copy_source_dirs = []
+        for dir in source_dirs:
+            source_dir_relative = Path(dir).relative_to(self.source)
+            dest_dir = self.dest / source_dir_relative
+            if dest_dir.exists() and dest_dir.is_dir():
+                continue
+            copy_source_dirs.append(dir)
+            os.makedirs(dest_dir)
+        return {"processed": len(copy_source_dirs), "result": copy_source_dirs}
 
     def _source_to_dest(self, need_copy_files):
         """
@@ -153,7 +206,7 @@ class Copy_Util:
         """
         n = 0
         if not need_copy_files:
-            log.info("没有需要复制的文件")
+            # log.info("没有需要复制的文件")
             return n
 
         os.makedirs(self.dest, exist_ok=True)
@@ -177,9 +230,6 @@ class Copy_Util:
             shutil.copy2(source_file_path, target_file_path)
             n += 1
             log.info(f"成功复制: {source_file_path} -> {target_file_path}")
-        # for file in need_copy_files:
-        #     shutil.copy2(file["path"], self.dest)
-        #     n += 1
-        #     log.info(f"成功复制:{file['name']}")
+
         log.info(f"成功复制 {n}/{len(need_copy_files)} 个文件")
         return n
